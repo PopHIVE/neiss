@@ -1,0 +1,9 @@
+*.Rproj
+.Rproj.user
+*.Rprofile
+*.Rhistory
+*.Rdata
+.DS_Store
+renv
+# Yearly NEISS workbooks (up to ~50 MB each); ingest.R re-downloads them from CPSC
+raw/*.xlsx
