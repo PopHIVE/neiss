@@ -393,9 +393,9 @@ if (!identical(process$raw_state, raw_state)) {
   # products are 0 and omitted). Unlike the product_group files:
   #   * each product is a single CPSC product code with CPSC's title, e.g.
   #     "Stairs or steps", "Beds or bedframes, other or not specified";
-  #   * a visit is counted under EVERY distinct product on its record (prod1,
-  #     prod2, prod3), CPSC's convention for product-related estimates, so
-  #     product shares within a cell can sum to more than 100%;
+  #   * each visit counts under every distinct product on its record (prod1,
+  #     prod2, prod3), so product shares within a cell can sum to more than
+  #     100%;
   #   * sex includes "All" (every sex, including Unknown); race and ethnicity
   #     are not stratified, which keeps the file small.
   # Columns:
@@ -406,15 +406,16 @@ if (!identical(process$raw_state, raw_state)) {
   #   neiss_product_rank               rank by weighted estimate within the cell
   #                                    (1 = most); NA for 9999 "uncategorized"
   #   neiss_product_unstable           1 if fewer than 20 sampled visits or a
-  #                                    national estimate under 1,200 (CPSC's
-  #                                    stability criteria other than the CV
-  #                                    rule, which needs variance estimation)
+  #                                    national estimate under 1,200 (thresholds
+  #                                    set here; no CV / sampling-error check,
+  #                                    which needs variance estimation)
 
   # Product titles from the NEISS_FMT sheet; the newest workbook's title wins.
-  # CPSC labels are "1842 - STAIRS OR STEPS" in capitals, cut at 67 characters.
+  # CPSC labels are "1842 - STAIRS OR STEPS" in capitals. Some appear truncated
+  # (observed: longest label is 67 characters, some end in an unclosed "(").
   clean_title <- function(x) {
     x <- gsub("\\s+", " ", trimws(x))
-    # drop a parenthetical left unclosed by the 67-character cut
+    # drop a parenthetical left unclosed by the apparent truncation
     n_open  <- lengths(regmatches(x, gregexpr("(", x, fixed = TRUE)))
     n_close <- lengths(regmatches(x, gregexpr(")", x, fixed = TRUE)))
     cut <- n_open > n_close
