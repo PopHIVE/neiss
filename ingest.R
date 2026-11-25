@@ -19,6 +19,12 @@
 # For each stratum we emit neiss_injuries (raw sampled count) and
 # neiss_injuries_weighted (sum of survey weights = national estimate).
 #
+# Plus two long files of individual CPSC products (section 9b), by age x sex:
+#   data_infant_product_code.csv.gz    children <2, by age in MONTHS
+#   data_agegroup_product_code.csv.gz  12 age GROUPS
+# These count a visit under every product on its record (prod1-prod3) and use
+# CPSC's own product titles, from the NEISS_FMT sheet in each workbook.
+#
 # The scrape + recoding is adapted from read_neiss_2019_2025.R (hadley/neiss
 # approach updated for the 2019+ 25-column CPSC layout). Product GROUPS come from
 # the NEISS product-code bands (a pure numeric function), so no product-title
@@ -167,6 +173,11 @@ if (!identical(process$raw_state, raw_state)) {
   # ships no category field; these bands are the historical product-group
   # structure reconstructed from the code ranges (approximate, not an official
   # CPSC file). Every code maps to a group, so there is no missingness.
+  # The bands put some products in misleading groups (beds 4076, tables 4057
+  # and chairs 4074 fall in "sports & recreation activities"; floors 1807,
+  # stairs 1842 and doors 1893 in "personal use, drugs & misc."). For
+  # rankings of what injures people, use the individual-product files from
+  # section 9b instead.
   prod_group <- function(code) {
     case_when(
       is.na(code)                 ~ NA_character_,
@@ -374,6 +385,108 @@ if (!identical(process$raw_state, raw_state)) {
   report("data_infant_product_rate",     infant_product_rate)
   report("data_agegroup_diagnosis_rate", agegroup_diagnosis_rate)
   report("data_agegroup_product_rate",   agegroup_product_rate)
+
+  # ---------------------------------------------------------------------------
+  # 9b. Individual products (CPSC product codes), by age x sex
+  # ---------------------------------------------------------------------------
+  # One row per year x age x sex x product code present in that cell (absent
+  # products are 0 and omitted). Unlike the product_group files:
+  #   * each product is a single CPSC product code with CPSC's title, e.g.
+  #     "Stairs or steps", "Beds or bedframes, other or not specified";
+  #   * each visit counts under every distinct product on its record (prod1,
+  #     prod2, prod3), so product shares within a cell can sum to more than
+  #     100%;
+  #   * sex includes "All" (every sex, including Unknown); race and ethnicity
+  #     are not stratified, which keeps the file small.
+  # Columns:
+  #   neiss_product_injuries           sampled visits involving the product
+  #   neiss_product_injuries_weighted  national estimate (rounded sum of weights)
+  #   neiss_product_pct_of_all         weighted share of ALL injury visits in the
+  #                                    year x age x sex cell, in percent
+  #   neiss_product_rank               rank by weighted estimate within the cell
+  #                                    (1 = most); NA for 9999 "uncategorized"
+  #   neiss_product_unstable           1 if fewer than 20 sampled visits or a
+  #                                    national estimate under 1,200 (thresholds
+  #                                    set here; no CV / sampling-error check,
+  #                                    which needs variance estimation)
+
+  # Product titles from the NEISS_FMT sheet; the newest workbook's title wins.
+  # CPSC labels are "1842 - STAIRS OR STEPS" in capitals. Some appear truncated
+  # (observed: longest label is 67 characters, some end in an unclosed "(").
+  clean_title <- function(x) {
+    x <- gsub("\\s+", " ", trimws(x))
+    # drop a parenthetical left unclosed by the apparent truncation
+    n_open  <- lengths(regmatches(x, gregexpr("(", x, fixed = TRUE)))
+    n_close <- lengths(regmatches(x, gregexpr(")", x, fixed = TRUE)))
+    cut <- n_open > n_close
+    x[cut] <- sub("\\s*\\([^()]*$", "", x[cut])
+    x <- tolower(x)
+    x <- paste0(toupper(substr(x, 1, 1)), substring(x, 2))
+    x <- gsub(",\\s*\\(", " (", x)                 # "accessories, (excl" -> "accessories (excl"
+    x <- gsub("\\b(excl|incl)\\.(?=\\S)", "\\1. ", x, perl = TRUE)
+    for (a in c("ATV", "TV", "CB", "VCR", "DVD", "CD", "PVC", "LP", "BB")) {
+      x <- gsub(paste0("\\b", a, "(s?)\\b"), paste0(a, "\\1"), x, ignore.case = TRUE, perl = TRUE)
+    }
+    x <- gsub("\\bchristmas\\b", "Christmas", x, perl = TRUE)
+    sub("[,; ]+$", "", x)
+  }
+  product_titles <- bind_rows(lapply(rev(local), function(f) {
+    fmt <- read_excel(f, sheet = "NEISS_FMT", col_types = "text")
+    names(fmt) <- c("fmt", "start", "end", "label")
+    fmt[fmt$fmt == "PROD", c("start", "label")]
+  })) %>%
+    transmute(product_code = as.integer(start),
+              product = sub("^\\s*\\d+\\s*-\\s*", "", label)) %>%
+    filter(!is.na(product_code)) %>%
+    distinct(product_code, .keep_all = TRUE) %>%
+    mutate(product = clean_title(product))
+
+  product_long <- function(df, age_col) {
+    df <- df %>%
+      transmute(rec = row_number(), time, age = .data[[age_col]], sex, weight,
+                prod1, prod2, prod3)
+    df <- bind_rows(df, mutate(df, sex = "All"))
+    totals <- df %>%
+      group_by(time, age, sex) %>%
+      summarise(total_wt = sum(weight, na.rm = TRUE), .groups = "drop")
+    df %>%
+      tidyr::pivot_longer(c(prod1, prod2, prod3), values_to = "product_code") %>%
+      filter(!is.na(product_code), product_code != 0) %>%
+      distinct(rec, sex, product_code, .keep_all = TRUE) %>%   # once per visit
+      group_by(time, age, sex, product_code) %>%
+      summarise(n = n(), wt = sum(weight, na.rm = TRUE), .groups = "drop") %>%
+      inner_join(totals, by = c("time", "age", "sex")) %>%
+      left_join(product_titles, by = "product_code") %>%
+      group_by(time, age, sex) %>%
+      mutate(
+        neiss_product_rank = ifelse(
+          product_code == 9999, NA_integer_,
+          rank(ifelse(product_code == 9999, Inf, -wt), ties.method = "min")
+        )
+      ) %>%
+      ungroup() %>%
+      transmute(
+        geography = "00", time, age, sex,
+        product_code = as.integer(product_code),
+        product = coalesce(product, paste("Product code", product_code)),
+        neiss_product_injuries          = n,
+        neiss_product_injuries_weighted = round(wt),
+        neiss_product_pct_of_all        = round(100 * wt / total_wt, 2),
+        neiss_product_rank              = as.integer(neiss_product_rank),
+        neiss_product_unstable          = as.integer(n < 20 | wt < 1200)
+      ) %>%
+      arrange(time, age, sex, neiss_product_rank)
+  }
+
+  infant_product_code   <- product_long(infants,   "age_month")
+  agegroup_product_code <- product_long(agegroups, "age_group")
+
+  vroom::vroom_write(infant_product_code,   "standard/data_infant_product_code.csv.gz",   ",")
+  vroom::vroom_write(agegroup_product_code, "standard/data_agegroup_product_code.csv.gz", ",")
+
+  cat("\nWrote (individual products, long):\n")
+  report("data_infant_product_code",   infant_product_code)
+  report("data_agegroup_product_code", agegroup_product_code)
 
   # ---------------------------------------------------------------------------
   # 10. Record processed state

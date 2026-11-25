@@ -15,6 +15,7 @@ This is a [Data Collection Framework](https://github.com/PopHIVE/dcf) (`dcf`) da
 - `standard/` — standardized output, two age schemes by two injury breakdowns, each with a `_rate` variant:
   - `data_infant_diagnosis`, `data_infant_product` — children under 2, age in months
   - `data_agegroup_diagnosis`, `data_agegroup_product` — 12 age groups
+- `standard/data_infant_product_code.csv.gz`, `standard/data_agegroup_product_code.csv.gz` — individual CPSC products, one row per year × age × sex × product code, with CPSC's product titles (from the `NEISS_FMT` sheet in each workbook). A visit counts under each of the up to three products on its record. Use these to rank products: the `*_product` files group products by code range, which is approximate and puts some products in misleading groups (beds and tables under sports & recreation, floors and stairs under personal use).
 
 ## Consumed by
 
